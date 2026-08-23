@@ -1,0 +1,26 @@
+## ESP-IDF Component Manager manifest for the Folo AI Passport build.
+## Keep only dependencies used by the XiaoZhi core and this ESP32-C3 badge.
+dependencies:
+  78/esp-wifi-connect: ~3.2.2
+  # XiaoZhi's transport-neutral HTTP/WebSocket/MQTT/UDP interfaces live in
+  # this shared package; no ML307 board or UART modem source is included here.
+  78/esp-ml307: ~3.6.6
+  78/xiaozhi-fonts: ~2.0.0
+
+  espressif/esp_audio_effects: ~1.3.0
+  espressif/esp_audio_codec: ~2.5.0
+  espressif/esp_codec_dev: ~1.5.6
+  espressif/esp-sr: ~2.4.7
+  espressif/button: ~4.2.0
+  espressif/led_strip: ~3.0.2
+
+  lvgl/lvgl: ~9.5.0
+  esp_lvgl_port: ~2.8.0
+  espressif2022/image_player: ^1.1.1
+  espressif2022/esp_emote_expression: ^1.0.2
+  espressif/esp_mmap_assets: ^1.3.2
+  espressif/esp_image_effects: ^1.0.1
+  espressif/esp_new_jpeg: ^1.0.2
+
+  idf:
+    version: '>=5.5.2'

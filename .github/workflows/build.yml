@@ -1,0 +1,41 @@
+name: Build Folo AI Passport
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run host tests
+        run: python -m unittest discover -s scripts/tests -v
+
+      - name: Build ESP32-C3 firmware
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py folo/ai-passport-c3 \
+            --name folo-ai-passport-c3 \
+            --language zh-CN \
+            --wake-word nihaoxiaozhi
+
+      - name: Upload merged firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: folo-ai-passport-xiaozhi-${{ github.sha }}
+          path: build/merged-binary.bin
+          if-no-files-found: error
+

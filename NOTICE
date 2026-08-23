@@ -1,0 +1,17 @@
+Folo AI Passport XiaoZhi
+
+This repository is derived from xiaozhi-esp32:
+https://github.com/78/xiaozhi-esp32
+
+Upstream snapshot used for this port:
+- Version: 2.4.2
+- Commit: bb9122ab08c3083eeb4f67b3974b7afe771723b8
+
+The upstream project is licensed under the MIT License. The original license
+and copyright notice are preserved in LICENSE.
+
+Badge-specific modifications include the folo-ai-passport-c3 board identity,
+ESP32-C3 pin mapping, ST7789P3 panel initialization, ES8311 audio wiring,
+GPIO0 ADC ladder buttons, 8 MB build configuration, Windows build launcher
+compatibility, and single-board repository/CI packaging.
+

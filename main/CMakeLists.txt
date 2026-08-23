@@ -1,0 +1,488 @@
+# Define source files
+set(SOURCES "audio/audio_codec.cc"
+            "audio/audio_debugger.cc"
+            "audio/audio_service.cc"
+            "audio/demuxer/ogg_demuxer.cc"
+            "notify/notify_player.cc"
+            "audio/codecs/no_audio_codec.cc"
+            "audio/codecs/box_audio_codec.cc"
+            "audio/codecs/es8311_audio_codec.cc"
+            "audio/codecs/es8374_audio_codec.cc"
+            "audio/codecs/es8388_audio_codec.cc"
+            "audio/codecs/es8389_audio_codec.cc"
+            "audio/codecs/dummy_audio_codec.cc"
+            "led/single_led.cc"
+            "led/circular_strip.cc"
+            "led/gpio_led.cc"
+            "display/display.cc"
+            "display/text_glyph.cc"
+            "display/lcd_display.cc"
+            "display/oled_display.cc"
+            "display/lvgl_display/lvgl_display.cc"
+            "display/emote_display.cc"
+            "display/lvgl_display/emoji_collection.cc"
+            "display/lvgl_display/lvgl_theme.cc"
+            "display/lvgl_display/lvgl_font.cc"
+            "display/lvgl_display/dynamic_glyph_cache.cc"
+            "display/lvgl_display/lvgl_image.cc"
+            "display/lvgl_display/gif/lvgl_gif.cc"
+            "display/lvgl_display/gif/gifdec.c"
+            "display/lvgl_display/jpg/image_to_jpeg.cpp"
+            "display/lvgl_display/jpg/jpeg_to_image.c"
+            "protocols/protocol.cc"
+            "protocols/text_glyph_payload.cc"
+            "protocols/mqtt_protocol.cc"
+            "protocols/websocket_protocol.cc"
+            "mcp_server.cc"
+            "system_info.cc"
+            "application.cc"
+            "ota.cc"
+            "settings.cc"
+            "device_state_machine.cc"
+            "assets.cc"
+            "main.cc"
+            )
+
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+
+# Add board common files
+list(APPEND SOURCES
+    "boards/common/board.cc"
+    "boards/common/wifi_board.cc"
+    "boards/common/backlight.cc"
+    "boards/common/button.cc"
+)
+list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
+
+
+idf_build_get_property(build_components BUILD_COMPONENTS)
+# Function to find component dynamically by pattern
+function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
+    foreach(COMPONENT ${build_components})
+        if(COMPONENT MATCHES "${PATTERN}")
+            set(${COMPONENT_VAR} ${COMPONENT} PARENT_SCOPE)
+            idf_component_get_property(COMPONENT_PATH ${COMPONENT} COMPONENT_DIR)
+            set(${PATH_VAR} "${COMPONENT_PATH}" PARENT_SCOPE)
+            break()
+        endif()
+    endforeach()
+endfunction()
+
+# Set default BUILTIN_TEXT_FONT and BUILTIN_ICON_FONT
+set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
+set(BUILTIN_ICON_FONT font_material_symbols_14_1)
+
+set(EMOTE_RESOLUTION "320_240")
+
+# This standalone repository supports one physical board.
+if(CONFIG_BOARD_TYPE_FOLO_AI_PASSPORT_C3)
+    set(BOARD_DIR "folo/ai-passport-c3")
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
+    set(BUILTIN_ICON_FONT font_material_symbols_20_4)
+    set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_32)
+endif()
+
+if(NOT BOARD_DIR AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    message(FATAL_ERROR "The selected board does not define BOARD_DIR")
+endif()
+
+set(BOARD_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/config.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_CONFIG_FILE}")
+
+# BOARD_TYPE and BOARD_MANUFACTURER are reported by the firmware.
+# Prefer config.json and fall back to values derived from the full board directory.
+set(BOARD_TYPE "")
+set(BOARD_MANUFACTURER "")
+if(EXISTS "${BOARD_CONFIG_FILE}")
+    file(READ "${BOARD_CONFIG_FILE}" BOARD_CONFIG_JSON)
+    string(REGEX MATCH "\"type\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]+)\"" BOARD_TYPE_MATCH "${BOARD_CONFIG_JSON}")
+    if(BOARD_TYPE_MATCH)
+        set(BOARD_TYPE "${CMAKE_MATCH_1}")
+    endif()
+    string(REGEX MATCH "\"manufacturer\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]+)\"" BOARD_MANUFACTURER_MATCH "${BOARD_CONFIG_JSON}")
+    if(BOARD_MANUFACTURER_MATCH)
+        set(BOARD_MANUFACTURER "${CMAKE_MATCH_1}")
+    endif()
+endif()
+if(NOT BOARD_TYPE)
+    string(REPLACE "/" "-" BOARD_TYPE "${BOARD_DIR}")
+endif()
+if(NOT BOARD_MANUFACTURER AND BOARD_DIR MATCHES "^([^/]+)/")
+    set(BOARD_MANUFACTURER "${CMAKE_MATCH_1}")
+endif()
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT BOARD_TYPE MATCHES "^[a-z0-9.-]+$")
+    message(FATAL_ERROR
+        "Invalid BOARD_TYPE '${BOARD_TYPE}': only lowercase letters, digits, '.' and '-' are allowed"
+    )
+endif()
+
+file(GLOB BOARD_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.c
+)
+list(APPEND SOURCES ${BOARD_SOURCES})
+
+# Select one audio engine for each chip family
+if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
+    list(APPEND SOURCES "audio/engines/afe_audio_engine.cc")
+    list(APPEND SOURCES "audio/wake_words/custom_wake_word.cc")
+    list(APPEND SOURCES "audio/wake_words/wake_word_audio_cache.cc")
+else()
+    list(APPEND SOURCES "audio/engines/lite_audio_engine.cc")
+    list(APPEND SOURCES "audio/wake_words/esp_wake_word.cc")
+endif()
+
+# Auto Select Additional Sources
+if (CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+    list(APPEND SOURCES "boards/common/blufi.cpp")
+endif ()
+# Select language directory according to Kconfig
+if(CONFIG_LANGUAGE_ZH_CN)
+    set(LANG_DIR "zh-CN")
+elseif(CONFIG_LANGUAGE_ZH_TW)
+    set(LANG_DIR "zh-TW")
+elseif(CONFIG_LANGUAGE_EN_US)
+    set(LANG_DIR "en-US")
+elseif(CONFIG_LANGUAGE_JA_JP)
+    set(LANG_DIR "ja-JP")
+elseif(CONFIG_LANGUAGE_KO_KR)
+    set(LANG_DIR "ko-KR")
+elseif(CONFIG_LANGUAGE_VI_VN)
+    set(LANG_DIR "vi-VN")
+elseif(CONFIG_LANGUAGE_TH_TH)
+    set(LANG_DIR "th-TH")
+elseif(CONFIG_LANGUAGE_DE_DE)
+    set(LANG_DIR "de-DE")
+elseif(CONFIG_LANGUAGE_FR_FR)
+    set(LANG_DIR "fr-FR")
+elseif(CONFIG_LANGUAGE_ES_ES)
+    set(LANG_DIR "es-ES")
+elseif(CONFIG_LANGUAGE_IT_IT)
+    set(LANG_DIR "it-IT")
+elseif(CONFIG_LANGUAGE_RU_RU)
+    set(LANG_DIR "ru-RU")
+elseif(CONFIG_LANGUAGE_AR_SA)
+    set(LANG_DIR "ar-SA")
+elseif(CONFIG_LANGUAGE_HI_IN)
+    set(LANG_DIR "hi-IN")
+elseif(CONFIG_LANGUAGE_MR_IN)
+    set(LANG_DIR "mr-IN")
+elseif(CONFIG_LANGUAGE_PT_PT)
+    set(LANG_DIR "pt-PT")
+elseif(CONFIG_LANGUAGE_PL_PL)
+    set(LANG_DIR "pl-PL")
+elseif(CONFIG_LANGUAGE_CS_CZ)
+    set(LANG_DIR "cs-CZ")
+elseif(CONFIG_LANGUAGE_FI_FI)
+    set(LANG_DIR "fi-FI")
+elseif(CONFIG_LANGUAGE_TR_TR)
+    set(LANG_DIR "tr-TR")
+elseif(CONFIG_LANGUAGE_ID_ID)
+    set(LANG_DIR "id-ID")
+elseif(CONFIG_LANGUAGE_UK_UA)
+    set(LANG_DIR "uk-UA")
+elseif(CONFIG_LANGUAGE_RO_RO)
+    set(LANG_DIR "ro-RO")
+elseif(CONFIG_LANGUAGE_BG_BG)
+    set(LANG_DIR "bg-BG")
+elseif(CONFIG_LANGUAGE_CA_ES)
+    set(LANG_DIR "ca-ES")
+elseif(CONFIG_LANGUAGE_DA_DK)
+    set(LANG_DIR "da-DK")
+elseif(CONFIG_LANGUAGE_EL_GR)
+    set(LANG_DIR "el-GR")
+elseif(CONFIG_LANGUAGE_FA_IR)
+    set(LANG_DIR "fa-IR")
+elseif(CONFIG_LANGUAGE_FIL_PH)
+    set(LANG_DIR "fil-PH")
+elseif(CONFIG_LANGUAGE_HE_IL)
+    set(LANG_DIR "he-IL")
+elseif(CONFIG_LANGUAGE_HR_HR)
+    set(LANG_DIR "hr-HR")
+elseif(CONFIG_LANGUAGE_HU_HU)
+    set(LANG_DIR "hu-HU")
+elseif(CONFIG_LANGUAGE_MS_MY)
+    set(LANG_DIR "ms-MY")
+elseif(CONFIG_LANGUAGE_NB_NO)
+    set(LANG_DIR "nb-NO")
+elseif(CONFIG_LANGUAGE_NL_NL)
+    set(LANG_DIR "nl-NL")
+elseif(CONFIG_LANGUAGE_SK_SK)
+    set(LANG_DIR "sk-SK")
+elseif(CONFIG_LANGUAGE_SL_SI)
+    set(LANG_DIR "sl-SI")
+elseif(CONFIG_LANGUAGE_SV_SE)
+    set(LANG_DIR "sv-SE")
+elseif(CONFIG_LANGUAGE_SR_RS)
+    set(LANG_DIR "sr-RS")
+endif()
+
+# Define generation path
+set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/${LANG_DIR}/language.json")
+set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/assets/lang_config.h")
+
+# Collect current language audio files
+file(GLOB LANG_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/${LANG_DIR}/*.ogg)
+
+# If not en-US, collect en-US audio files as fallback for missing files
+if(NOT LANG_DIR STREQUAL "en-US")
+    file(GLOB EN_US_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/en-US/*.ogg)
+
+    # Extract filenames (without path) from current language
+    set(EXISTING_NAMES "")
+    foreach(SOUND_FILE ${LANG_SOUNDS})
+        get_filename_component(FILENAME ${SOUND_FILE} NAME)
+        list(APPEND EXISTING_NAMES ${FILENAME})
+    endforeach()
+
+    # Only add en-US audio files that are missing in current language
+    foreach(EN_SOUND ${EN_US_SOUNDS})
+        get_filename_component(FILENAME ${EN_SOUND} NAME)
+        if(NOT ${FILENAME} IN_LIST EXISTING_NAMES)
+            list(APPEND LANG_SOUNDS ${EN_SOUND})
+            message(STATUS "Using en-US fallback for missing audio: ${FILENAME}")
+        endif()
+    endforeach()
+endif()
+
+file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
+
+set(MAIN_PRIV_REQUIRES_EXTRA "")
+idf_component_register(SRCS ${SOURCES}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    INCLUDE_DIRS ${INCLUDE_DIRS}
+                    WHOLE_ARCHIVE
+                    PRIV_REQUIRES
+                        esp_pm
+                        esp_psram
+                        esp_netif
+                        esp_eth
+                        esp_driver_gpio
+                        esp_driver_uart
+                        esp_driver_spi
+                        esp_driver_i2c
+                        esp_driver_i2s
+                        esp_driver_ledc
+                        esp_driver_jpeg
+                        esp_driver_ppa
+                        esp_driver_tsens
+                        esp_app_format
+                        app_update
+                        spi_flash
+                        mbedtls
+                        console
+                        efuse
+                        bt
+                        fatfs
+                        xiaozhi-fonts
+                        ${MAIN_PRIV_REQUIRES_EXTRA}
+                    )
+
+# Use target_compile_definitions to define the reported board identity
+# If BOARD_NAME is empty, use BOARD_TYPE
+if(NOT BOARD_NAME)
+    set(BOARD_NAME ${BOARD_TYPE})
+endif()
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT BOARD_NAME MATCHES "^[a-z0-9.-]+$")
+    message(FATAL_ERROR
+        "Invalid BOARD_NAME '${BOARD_NAME}': only lowercase letters, digits, '.' and '-' are allowed"
+    )
+endif()
+string(REGEX MATCH "^font_noto_sans_basic_([0-9]+)_([0-9]+)$" _font_match "${BUILTIN_TEXT_FONT}")
+if(NOT _font_match)
+    message(FATAL_ERROR "Unsupported built-in text font name: ${BUILTIN_TEXT_FONT}")
+endif()
+set(TEXT_FONT_SIZE "${CMAKE_MATCH_1}")
+set(TEXT_FONT_BPP "${CMAKE_MATCH_2}")
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    target_compile_definitions(${COMPONENT_LIB}
+                        PRIVATE BOARD_TYPE=\"${BOARD_TYPE}\" BOARD_NAME=\"${BOARD_NAME}\"
+                        PRIVATE BOARD_MANUFACTURER=\"${BOARD_MANUFACTURER}\"
+                        PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
+                        PRIVATE TEXT_FONT_SIZE=${TEXT_FONT_SIZE} TEXT_FONT_BPP=${TEXT_FONT_BPP}
+                        )
+endif()
+
+# Add generation rules
+add_custom_command(
+    OUTPUT ${LANG_HEADER}
+    COMMAND python ${PROJECT_DIR}/scripts/gen_lang.py
+            --language "${LANG_DIR}"
+            --output "${LANG_HEADER}"
+    DEPENDS
+        ${LANG_JSON}
+        ${PROJECT_DIR}/scripts/gen_lang.py
+    COMMENT "Generating ${LANG_DIR} language config"
+)
+
+# Force build generation dependencies
+add_custom_target(lang_header ALL
+    DEPENDS ${LANG_HEADER}
+)
+
+# Find ESP-SR component dynamically
+find_component_by_pattern("espressif__esp-sr" ESP_SR_COMPONENT ESP_SR_COMPONENT_PATH)
+if(ESP_SR_COMPONENT_PATH)
+    set(ESP_SR_MODEL_PATH "${ESP_SR_COMPONENT_PATH}/model")
+endif()
+
+# Find xiaozhi-fonts component dynamically
+find_component_by_pattern("xiaozhi-fonts" NOTO_FONTS_COMPONENT NOTO_FONTS_COMPONENT_PATH)
+if(NOTO_FONTS_COMPONENT_PATH)
+    set(NOTO_FONTS_PATH "${NOTO_FONTS_COMPONENT_PATH}")
+endif()
+
+# Function to build default assets based on configuration
+function(build_default_assets_bin)
+    # Set output path for generated assets.bin
+    set(GENERATED_ASSETS_BIN "${CMAKE_BINARY_DIR}/generated_assets.bin")
+    set(DEFAULT_ASSETS_DEPENDENCIES
+        "${SDKCONFIG}"
+        "${PROJECT_DIR}/scripts/build_default_assets.py"
+    )
+
+    # Prepare arguments for build script
+    set(BUILD_ARGS
+        "--sdkconfig" "${SDKCONFIG}"
+        "--output" "${GENERATED_ASSETS_BIN}"
+    )
+
+    # Add builtin text font if defined
+    if(BUILTIN_TEXT_FONT)
+        list(APPEND BUILD_ARGS "--builtin_text_font" "${BUILTIN_TEXT_FONT}")
+        string(REPLACE "_basic_" "_common_" COMMON_TEXT_FONT "${BUILTIN_TEXT_FONT}")
+        set(COMMON_TEXT_FONT_FILE "${NOTO_FONTS_PATH}/cbin/${COMMON_TEXT_FONT}.bin")
+        if(EXISTS "${COMMON_TEXT_FONT_FILE}")
+            list(APPEND DEFAULT_ASSETS_DEPENDENCIES "${COMMON_TEXT_FONT_FILE}")
+        endif()
+        if(EXISTS "${NOTO_FONTS_PATH}/manifest.json")
+            list(APPEND DEFAULT_ASSETS_DEPENDENCIES "${NOTO_FONTS_PATH}/manifest.json")
+        endif()
+    endif()
+
+    # Add default emoji collection if defined
+    if(DEFAULT_EMOJI_COLLECTION)
+        list(APPEND BUILD_ARGS "--emoji_collection" "${DEFAULT_EMOJI_COLLECTION}")
+        file(GLOB DEFAULT_EMOJI_FILES CONFIGURE_DEPENDS
+            "${NOTO_FONTS_PATH}/png/${DEFAULT_EMOJI_COLLECTION}/*"
+        )
+        list(APPEND DEFAULT_ASSETS_DEPENDENCIES ${DEFAULT_EMOJI_FILES})
+    endif()
+
+    # Add default assets extra files if defined
+    if(DEFAULT_ASSETS_EXTRA_FILES)
+        list(APPEND BUILD_ARGS "--extra_files" "${DEFAULT_ASSETS_EXTRA_FILES}")
+    endif()
+
+    list(APPEND BUILD_ARGS "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}")
+    list(APPEND BUILD_ARGS "--noto_fonts_path" "${NOTO_FONTS_PATH}")
+
+    # Create custom command to build assets
+    add_custom_command(
+        OUTPUT ${GENERATED_ASSETS_BIN}
+        COMMAND python ${PROJECT_DIR}/scripts/build_default_assets.py ${BUILD_ARGS}
+        DEPENDS ${DEFAULT_ASSETS_DEPENDENCIES}
+        COMMENT "Building default assets.bin based on configuration"
+        VERBATIM
+    )
+
+    # Create target for generated assets
+    add_custom_target(generated_default_assets ALL
+        DEPENDS ${GENERATED_ASSETS_BIN}
+    )
+
+    # Set the generated file path in parent scope
+    set(GENERATED_ASSETS_LOCAL_FILE ${GENERATED_ASSETS_BIN} PARENT_SCOPE)
+
+    message(STATUS "Default assets build configured: ${GENERATED_ASSETS_BIN}")
+endfunction()
+
+
+# Function to get local assets file path (handles both URL and local file)
+function(get_assets_local_file assets_source assets_local_file_var)
+    # Check if it's a URL (starts with http:// or https://)
+    if(assets_source MATCHES "^https?://")
+        # It's a URL, download it
+        get_filename_component(ASSETS_FILENAME "${assets_source}" NAME)
+        set(ASSETS_LOCAL_FILE "${CMAKE_BINARY_DIR}/${ASSETS_FILENAME}")
+        set(ASSETS_TEMP_FILE "${CMAKE_BINARY_DIR}/${ASSETS_FILENAME}.tmp")
+
+        # Check if local file exists
+        if(EXISTS ${ASSETS_LOCAL_FILE})
+            message(STATUS "Assets file ${ASSETS_FILENAME} already exists, skipping download")
+        else()
+            message(STATUS "Downloading ${ASSETS_FILENAME}")
+
+            # Clean up any existing temp file
+            if(EXISTS ${ASSETS_TEMP_FILE})
+                file(REMOVE ${ASSETS_TEMP_FILE})
+            endif()
+
+            # Download to temporary file first
+            file(DOWNLOAD ${assets_source} ${ASSETS_TEMP_FILE}
+                 STATUS DOWNLOAD_STATUS)
+            list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+            if(NOT STATUS_CODE EQUAL 0)
+                # Clean up temp file on failure
+                if(EXISTS ${ASSETS_TEMP_FILE})
+                    file(REMOVE ${ASSETS_TEMP_FILE})
+                endif()
+                message(FATAL_ERROR "Failed to download ${ASSETS_FILENAME} from ${assets_source}")
+            endif()
+
+            # Move temp file to final location (atomic operation)
+            file(RENAME ${ASSETS_TEMP_FILE} ${ASSETS_LOCAL_FILE})
+            message(STATUS "Successfully downloaded ${ASSETS_FILENAME}")
+        endif()
+    else()
+        # It's a local file path
+        if(IS_ABSOLUTE "${assets_source}")
+            set(ASSETS_LOCAL_FILE "${assets_source}")
+        else()
+            set(ASSETS_LOCAL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${assets_source}")
+        endif()
+
+        # Check if local file exists
+        if(NOT EXISTS ${ASSETS_LOCAL_FILE})
+            message(FATAL_ERROR "Assets file not found: ${ASSETS_LOCAL_FILE}")
+        endif()
+
+        message(STATUS "Using assets file: ${ASSETS_LOCAL_FILE}")
+    endif()
+
+    set(${assets_local_file_var} ${ASSETS_LOCAL_FILE} PARENT_SCOPE)
+endfunction()
+
+
+partition_table_get_partition_info(size "--partition-name assets" "size")
+partition_table_get_partition_info(offset "--partition-name assets" "offset")
+if ("${size}" AND "${offset}")
+    # Flash assets based on configuration
+    if(CONFIG_FLASH_DEFAULT_ASSETS)
+        # Build default assets based on configuration
+        build_default_assets_bin()
+        esptool_py_flash_to_partition(flash "assets" "${GENERATED_ASSETS_LOCAL_FILE}")
+        message(STATUS "Generated default assets flash configured: ${GENERATED_ASSETS_LOCAL_FILE} -> assets partition")
+    elseif(CONFIG_FLASH_CUSTOM_ASSETS)
+        # Flash custom assets
+        get_assets_local_file("${CONFIG_CUSTOM_ASSETS_FILE}" ASSETS_LOCAL_FILE)
+        esptool_py_flash_to_partition(flash "assets" "${ASSETS_LOCAL_FILE}")
+        message(STATUS "Custom assets flash configured: ${ASSETS_LOCAL_FILE} -> assets partition")
+    elseif(CONFIG_FLASH_EXPRESSION_ASSETS)
+        set(ASSETS_NAME "expression_assets")
+        set(ASSETS_PARTITION "assets")
+        set(ASSETS_FILE "${CMAKE_BINARY_DIR}/${ASSETS_NAME}.bin")
+
+        if(EMOTE_EXTERNAL_PATH)
+            build_speaker_assets_bin("${ASSETS_PARTITION}" ${EMOTE_RESOLUTION} ${ASSETS_FILE} ${CONFIG_MMAP_FILE_NAME_LENGTH} "${EMOTE_EXTERNAL_PATH}")
+        else()
+            build_speaker_assets_bin("${ASSETS_PARTITION}" ${EMOTE_RESOLUTION} ${ASSETS_FILE} ${CONFIG_MMAP_FILE_NAME_LENGTH})
+        endif()
+        message(STATUS "Generated emote assets: ${ASSETS_FILE} -> ${ASSETS_PARTITION} partition")
+        esptool_py_flash_to_partition(flash "${ASSETS_PARTITION}" "${ASSETS_FILE}")
+    elseif(CONFIG_FLASH_NONE_ASSETS)
+        message(STATUS "Assets flashing disabled (FLASH_NONE_ASSETS)")
+    endif()
+else()
+    message(STATUS "Assets partition not found, using v1 partition table")
+endif()
