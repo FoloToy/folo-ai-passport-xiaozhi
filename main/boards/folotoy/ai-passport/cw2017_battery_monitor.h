@@ -1,6 +1,7 @@
 #ifndef CW2017_BATTERY_MONITOR_H
 #define CW2017_BATTERY_MONITOR_H
 
+#include <cstddef>
 #include <driver/i2c_master.h>
 
 // CW2017 fuel-gauge helper for boards that mount the chip on the shared
@@ -33,7 +34,14 @@ private:
     uint8_t device_address_;
     bool present_ = false;
 
+    int ReadReg(uint8_t reg, uint8_t* data, size_t length);
+    int WriteReg(uint8_t reg, uint8_t value);
     int ReadReg16(uint8_t reg, uint16_t* value);
+    int EnterSleep();
+    int EnterActive();
+    int ProfileMatches(bool* matches);
+    int UpdateProfile();
+    int WaitForSocReady();
 };
 
 #endif  // CW2017_BATTERY_MONITOR_H

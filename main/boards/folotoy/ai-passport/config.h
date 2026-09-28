@@ -11,10 +11,11 @@
 // ESP32-C3, 8 MB flash, no PSRAM, USB Serial/JTAG console.
 // ============================================================================
 
-// Audio sample rates. Match the FoloToy reference board: 24 kHz avoids
-// server-side resampling mismatch (server sends 24 kHz audio).
-#define AUDIO_INPUT_SAMPLE_RATE  24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+// Keep the C3 codec path at the protocol/native 16 kHz rate.  The C3 has no
+// PSRAM; forcing a 16 kHz -> 24 kHz resampler allocates a temporary buffer
+// during playback and can fragment the remaining internal SRAM.
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 // I2S full-duplex to ES8311 (shared MCLK/BCLK/WS).
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_6

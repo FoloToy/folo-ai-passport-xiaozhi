@@ -45,6 +45,14 @@ public:
     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
     virtual void SetEmotion(const char* emotion);
     virtual void SetChatMessage(const char* role, const char* content);
+    // Show device activation instructions. LCD displays may override this
+    // with a QR code and a dedicated activation-code layout.
+    virtual void ShowActivationCode(const char* code, const char* message) {
+        SetEmotion("link");
+        SetChatMessage("system", message);
+    }
+    // Leave the activation page and restore the normal emotion view.
+    virtual void ClearActivationCode() {}
     virtual void ClearChatMessages();
     virtual void SetTheme(Theme* theme);
     virtual Theme* GetTheme() { return current_theme_; }

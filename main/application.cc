@@ -343,6 +343,9 @@ void Application::HandleActivationDoneEvent() {
     const bool has_error = !last_error_message_.empty();
     if (!has_error) {
         auto display = Board::GetInstance().GetDisplay();
+        display->ClearActivationCode();
+        display->SetStatus(Lang::Strings::STANDBY);
+        display->SetEmotion("neutral");
         std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
         display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
@@ -510,10 +513,12 @@ void Application::CheckNewVersion() {
         }
 
         // This will block the loop until the activation is done or timeout
+        bool activation_succeeded = false;
         for (int i = 0; i < 10; ++i) {
             ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
             esp_err_t err = ota_->Activate();
             if (err == ESP_OK) {
+                activation_succeeded = true;
                 break;
             } else if (err == ESP_ERR_TIMEOUT) {
                 vTaskDelay(pdMS_TO_TICKS(3000));
@@ -523,6 +528,9 @@ void Application::CheckNewVersion() {
             if (GetDeviceState() == kDeviceStateIdle) {
                 break;
             }
+        }
+        if (activation_succeeded) {
+            break;
         }
     }
 }
@@ -734,6 +742,8 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
     Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
+
+    Board::GetInstance().GetDisplay()->ShowActivationCode(code.c_str(), message.c_str());
 
     for (const auto& digit : code) {
         auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
