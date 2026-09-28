@@ -9,6 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
+from pathlib import Path
 
 # Switch to project root directory
 os.chdir(Path(__file__).resolve().parent.parent)
@@ -53,16 +54,22 @@ def get_project_version() -> Optional[str]:
                 return line.split("\"")[1]
     return None
 
+def _get_idf_command() -> list[str]:
+    """Get the command used to invoke the active ESP-IDF."""
+    idf_path = os.environ.get("IDF_PATH")
+
+    if idf_path:
+        idf_py = Path(idf_path) / "tools" / "idf.py"
+        if idf_py.is_file():
+            return [sys.executable, str(idf_py)]
+
+    raise RuntimeError(
+        "ESP-IDF environment is not initialized correctly. "
+        "IDF_PATH/tools/idf.py was not found."
+    )
 
 def _run_idf(*args: str, preview: bool = False) -> None:
-    # PowerShell exports idf.py as a shell function on Windows. A child process
-    # cannot execute that function (or a .py file through CreateProcess), so
-    # invoke the SDK entry point with the active Python interpreter directly.
-    idf_path = os.environ.get("IDF_PATH")
-    if os.name == "nt" and idf_path:
-        command = [sys.executable, str(Path(idf_path) / "tools" / "idf.py")]
-    else:
-        command = ["idf.py"]
+    command = _get_idf_command()
     if preview:
         command.append("--preview")
     command.extend(args)
@@ -386,7 +393,27 @@ _BOARDS_DIR = Path("main/boards")
 _DISPLAY_STYLE_SYMBOLS = {
     "default": "CONFIG_USE_DEFAULT_MESSAGE_STYLE",
     "wechat": "CONFIG_USE_WECHAT_MESSAGE_STYLE",
+    "emote": "CONFIG_USE_EMOTE_MESSAGE_STYLE",
 }
+_DYNAMIC_CAMERA_MIRROR_BOARD_CONFIGS = {
+    # These boards intentionally change orientation at runtime according to the
+    # detected sensor or persisted device state. A compile-time override would
+    # be misleading because that runtime decision would win afterwards.
+    "CONFIG_BOARD_TYPE_DF_S3_AI_CAM",
+    "CONFIG_BOARD_TYPE_ESP_SPARKBOT",
+    "CONFIG_BOARD_TYPE_M5STACK_ATOM_S3R_CAM_M12_ECHO_BASE",
+    "CONFIG_BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER",
+}
+_OPTIONAL_CAMERA_ENABLE_SYMBOLS = {
+    # ESP-VOCAT only constructs EspVideo when its optional USB UVC transport
+    # is enabled. Do not advertise mirror controls for the camera-less default
+    # build, but expose them automatically for an explicitly enabled variant.
+    "CONFIG_BOARD_TYPE_ESP_VOCAT": "CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE",
+}
+# Match both `new Esp32Camera` and `new (std::nothrow) Esp32Camera` (and EspVideo).
+_COMMON_CAMERA_CONSTRUCTOR_RE = re.compile(
+    r"\bnew(?:\s*\(\s*std::nothrow\s*\))?\s+Esp(?:32Camera|Video)\b"
+)
 
 
 def _sdkconfig_assignments(options: list[str]) -> dict[str, str]:
@@ -487,13 +514,30 @@ def _build_option_definitions(
     source = _board_source_text(board)
     definitions: list[dict[str, Any]] = []
 
-    # The badge has one fixed ST7789 panel; only its UI style is configurable.
+    for choice_name in ("DISPLAY_OLED_TYPE", "DISPLAY_LCD_TYPE"):
+        choice = _kconfig_choice(choice_name)
+        if board_config not in choice["board_configs"]:
+            continue
+        entries = [entry for entry in choice["entries"] if entry["value"] != "LCD_CUSTOM"]
+        definitions.append({
+            "key": "display_model",
+            "type": "select",
+            "default": _selected_choice_default(choice, assignments),
+            "choices": entries,
+        })
+        break
+
+    # Message styles are implemented by the color LCD display path. OLED and
+    # no-display boards deliberately do not expose a selector that has no effect.
     if re.search(r"\b[A-Za-z0-9_]*LcdDisplay\b", source):
         style_choice = _kconfig_choice("DISPLAY_STYLE")
+        emote_boards = _kconfig_config_board_dependencies("USE_EMOTE_MESSAGE_STYLE")
         style_choices = [
             {"value": "default", "label": "Default"},
             {"value": "wechat", "label": "WeChat"},
         ]
+        if board_config in emote_boards:
+            style_choices.append({"value": "emote", "label": "Emote animation"})
         style_default = "default"
         selected_style = _selected_choice_default(style_choice, assignments)
         for value, symbol in _DISPLAY_STYLE_SYMBOLS.items():
@@ -514,7 +558,21 @@ def _build_option_definitions(
             },
         ))
 
-    if "wifi_board.h" in source or re.search(r"\bWifiBoard\b", source):
+    aec_boards = _kconfig_config_board_dependencies("USE_DEVICE_AEC")
+    if board_config in aec_boards:
+        definitions.append({
+            "key": "aec_mode",
+            "type": "select",
+            "default": "device" if assignments.get("CONFIG_USE_DEVICE_AEC") == "y" else "off",
+            "choices": [
+                {"value": "off", "label": "Off"},
+                {"value": "device", "label": "Device-side AEC"},
+            ],
+        })
+
+    # ESP32-P4 obtains networking through a companion chip and cannot enable
+    # the local ESP-BluFi stack selected by this project option.
+    if target != "esp32p4" and ("wifi_board.h" in source or re.search(r"\bWifiBoard\b", source)):
         definitions.append({
             "key": "wifi_provisioning",
             "type": "select",
@@ -529,6 +587,20 @@ def _build_option_definitions(
                 {"value": "blufi", "label": "ESP-BluFi"},
             ],
         })
+
+    camera_enable_symbol = _OPTIONAL_CAMERA_ENABLE_SYMBOLS.get(board_config)
+    has_common_camera = (
+        _COMMON_CAMERA_CONSTRUCTOR_RE.search(source) is not None
+        and (
+            camera_enable_symbol is None
+            or assignments.get(camera_enable_symbol) == "y"
+        )
+    )
+    if has_common_camera and board_config not in _DYNAMIC_CAMERA_MIRROR_BOARD_CONFIGS:
+        definitions.extend((
+            {"key": "camera_hmirror", "type": "boolean", "default": False},
+            {"key": "camera_vflip", "type": "boolean", "default": False},
+        ))
 
     configured_defaults = build.get("build_options", {})
     if not isinstance(configured_defaults, dict):
@@ -588,15 +660,50 @@ def _build_options_sdkconfig(
     by_key = {definition["key"]: definition for definition in definitions}
     result: list[str] = []
 
+    if "display_model" in options:
+        selected = options["display_model"]
+        for choice in by_key["display_model"]["choices"]:
+            result.append(f"CONFIG_{choice['value']}={'y' if choice['value'] == selected else 'n'}")
+        if isinstance(selected, str) and selected.startswith("LCD_"):
+            # LCD_CUSTOM is intentionally not exposed in the cloud UI because
+            # it requires source-level panel configuration, but it is still a
+            # sibling in the Kconfig choice and must be disabled explicitly.
+            result.append("CONFIG_LCD_CUSTOM=n")
+
     if "display_style" in options:
         selected = options["display_style"]
         for choice in by_key["display_style"]["choices"]:
             value = choice["value"]
             symbol = _DISPLAY_STYLE_SYMBOLS[value]
             result.append(f"{symbol}={'y' if value == selected else 'n'}")
+        flash_symbols = (
+            "CONFIG_FLASH_NONE_ASSETS",
+            "CONFIG_FLASH_DEFAULT_ASSETS",
+            "CONFIG_FLASH_CUSTOM_ASSETS",
+            "CONFIG_FLASH_EXPRESSION_ASSETS",
+        )
+        if selected == "emote" and base_assignments.get("CONFIG_FLASH_CUSTOM_ASSETS") != "y":
+            result.extend(
+                f"{symbol}={'y' if symbol == 'CONFIG_FLASH_EXPRESSION_ASSETS' else 'n'}"
+                for symbol in flash_symbols
+            )
+        elif selected != "emote" and base_assignments.get("CONFIG_FLASH_EXPRESSION_ASSETS") == "y":
+            result.extend(
+                f"{symbol}={'y' if symbol == 'CONFIG_FLASH_DEFAULT_ASSETS' else 'n'}"
+                for symbol in flash_symbols
+            )
 
     if "multiline_chat" in options:
         result.append(f"CONFIG_USE_MULTILINE_CHAT_MESSAGE={'y' if options['multiline_chat'] else 'n'}")
+
+    if "aec_mode" in options:
+        device = options["aec_mode"] == "device"
+        result.extend((
+            f"CONFIG_USE_DEVICE_AEC={'y' if device else 'n'}",
+            "CONFIG_USE_SERVER_AEC=n",
+        ))
+        if device:
+            result.append("CONFIG_USE_AUDIO_PROCESSOR=y")
 
     if "wifi_provisioning" in options:
         blufi = options["wifi_provisioning"] == "blufi"
@@ -605,6 +712,12 @@ def _build_options_sdkconfig(
             f"CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING={'y' if blufi else 'n'}",
         ))
 
+    if "camera_hmirror" in options or "camera_vflip" in options:
+        result.extend((
+            "CONFIG_XIAOZHI_CAMERA_MIRROR_CONFIGURED=y",
+            f"CONFIG_XIAOZHI_CAMERA_HMIRROR={'y' if options.get('camera_hmirror') else 'n'}",
+            f"CONFIG_XIAOZHI_CAMERA_VFLIP={'y' if options.get('camera_vflip') else 'n'}",
+        ))
     return result
 
 
@@ -1003,7 +1116,14 @@ def _symbol_supports_target(symbol: str, target: str) -> bool:
             continue
         if in_symbol and stripped.startswith(("config ", "choice ", "endchoice", "menu ", "endmenu")):
             break
-        if in_symbol and "depends on" in stripped and target_flag in stripped:
+        if (
+            in_symbol
+            and "depends on" in stripped
+            and re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(target_flag)}(?![A-Za-z0-9_])",
+                stripped,
+            )
+        ):
             return True
     return False
 
@@ -1016,9 +1136,26 @@ def _resolve_board_config(
     variant_name: Optional[str] = None,
 ) -> str:
     """Resolve CONFIG_BOARD_TYPE_xxx for current board build."""
+    def validate_target(symbol: str) -> str:
+        if not _symbol_supports_target(symbol, target):
+            raise ValueError(
+                f"Board config {symbol} for {board_type!r} does not support "
+                f"target {target!r}"
+            )
+        return symbol
+
     explicit = _extract_board_config_from_sdkconfig_append(sdkconfig_append)
+    candidates = _find_board_config_candidates(board_type)
+    if not candidates:
+        raise ValueError(f"Cannot find board config symbol for {board_type}")
+
     if explicit and _board_config_symbol_exists(explicit):
-        return explicit
+        if explicit not in candidates:
+            raise ValueError(
+                f"Board config {explicit} does not select board directory "
+                f"{board_type!r}"
+            )
+        return validate_target(explicit)
     if explicit:
         print(
             f"[WARN] Explicit board config {explicit} does not exist in Kconfig; "
@@ -1026,11 +1163,8 @@ def _resolve_board_config(
             file=sys.stderr,
         )
 
-    candidates = _find_board_config_candidates(board_type)
-    if not candidates:
-        raise ValueError(f"Cannot find board config symbol for {board_type}")
     if len(candidates) == 1:
-        return candidates[0]
+        return validate_target(candidates[0])
 
     if variant_name:
         expected = "CONFIG_BOARD_TYPE_" + re.sub(
@@ -1040,11 +1174,11 @@ def _resolve_board_config(
         ).strip("_")
         by_variant = [candidate for candidate in candidates if candidate == expected]
         if len(by_variant) == 1:
-            return by_variant[0]
+            return validate_target(by_variant[0])
 
     by_target = [c for c in candidates if _symbol_supports_target(c, target)]
     if len(by_target) == 1:
-        return by_target[0]
+        return validate_target(by_target[0])
     if len(by_target) > 1:
         selected = by_target[0]
         print(
@@ -1052,32 +1186,12 @@ def _resolve_board_config(
             f"target-matched candidates={by_target}, selecting first: {selected}",
             file=sys.stderr,
         )
-        return selected
+        return validate_target(selected)
 
-    target_u = target.upper()
-    target_short = target_u.replace("ESP32", "")
-    by_name = [
-        c for c in candidates
-        if target_u in c or f"_{target_short}" in c
-    ]
-    if len(by_name) == 1:
-        return by_name[0]
-    if len(by_name) > 1:
-        selected = by_name[0]
-        print(
-            f"[WARN] Ambiguous board config for {board_type} (target={target}), "
-            f"name-matched candidates={by_name}, selecting first: {selected}",
-            file=sys.stderr,
-        )
-        return selected
-
-    selected = candidates[0]
-    print(
-        f"[WARN] Ambiguous board config for {board_type} (target={target}), "
-        f"candidates={candidates}, selecting first: {selected}",
-        file=sys.stderr,
+    raise ValueError(
+        f"No board config for {board_type!r} supports target {target!r}; "
+        f"candidates: {candidates}"
     )
-    return selected
 
 
 # Kconfig "select" entries are not automatically applied when we simply append
@@ -1092,6 +1206,13 @@ _AUTO_SELECT_RULES: dict[str, list[str]] = {
         "CONFIG_BT_BLE_BLUFI_ENABLE=y",
     ],
 }
+
+# sdkconfig.defaults.esp32s3 keeps a 1MB LVGL TLSF pool for PSRAM. Without
+# PSRAM that pool becomes a .dram0.bss array and overflows internal SRAM.
+_NO_SPIRAM_LVGL_OPTIONS = [
+    "CONFIG_LV_USE_BUILTIN_MALLOC=n",
+    "CONFIG_LV_USE_CLIB_MALLOC=y",
+]
 
 
 def _apply_auto_selects(sdkconfig_append: list[str]) -> list[str]:
@@ -1108,6 +1229,10 @@ def _apply_auto_selects(sdkconfig_append: list[str]) -> list[str]:
                 # must do the same instead of keeping the earlier value.
                 items = _merge_sdkconfig_options(items, deps)
                 break
+
+    assignments = _sdkconfig_assignments(items)
+    if assignments.get("CONFIG_SPIRAM") == "n":
+        items = _merge_sdkconfig_options(items, _NO_SPIRAM_LVGL_OPTIONS)
 
     return items
 
@@ -1396,7 +1521,9 @@ def build_board(
         )
 
         user_options: list[str] = []
-        validation_symbols: list[tuple[list[str], str]] = []
+        validation_symbols: list[tuple[list[str], str]] = [
+            ([board_type_config], "board selection"),
+        ]
         build_option_sdkconfig: list[str] = []
         selected_language = None
         selected_wake_word = None

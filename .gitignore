@@ -7,11 +7,9 @@ dist/
 .devcontainer/
 sdkconfig.old
 sdkconfig
+dependencies.lock
 .env
 releases/
-.pre-xiaozhi-source/
-build-nes/
-build-nes-portable-v6/
 main/assets/lang_config.h
 main/mmap_generate_emoji.h
 .DS_Store

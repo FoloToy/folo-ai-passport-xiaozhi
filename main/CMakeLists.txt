@@ -45,7 +45,7 @@ set(SOURCES "audio/audio_codec.cc"
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
-# Add board common files
+# Add only the common hardware layer required by the FoloToy AI Passport board.
 list(APPEND SOURCES
     "boards/common/board.cc"
     "boards/common/wifi_board.cc"
@@ -74,18 +74,16 @@ set(BUILTIN_ICON_FONT font_material_symbols_14_1)
 
 set(EMOTE_RESOLUTION "320_240")
 
-# This standalone repository supports one physical board.
-if(CONFIG_BOARD_TYPE_FOLO_AI_PASSPORT_C3)
-    set(BOARD_DIR "folo/ai-passport-c3")
+# This repository intentionally exposes one board: FoloToy AI Passport.
+if(CONFIG_BOARD_TYPE_FOLOTOY_AI_PASSPORT)
+    set(BOARD_DIR "folotoy/ai-passport")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_32)
 endif()
-
 if(NOT BOARD_DIR AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     message(FATAL_ERROR "The selected board does not define BOARD_DIR")
 endif()
-
 set(BOARD_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/config.json")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_CONFIG_FILE}")
 
@@ -169,6 +167,8 @@ elseif(CONFIG_LANGUAGE_MR_IN)
     set(LANG_DIR "mr-IN")
 elseif(CONFIG_LANGUAGE_PT_PT)
     set(LANG_DIR "pt-PT")
+elseif(CONFIG_LANGUAGE_PT_BR)
+    set(LANG_DIR "pt-BR")
 elseif(CONFIG_LANGUAGE_PL_PL)
     set(LANG_DIR "pl-PL")
 elseif(CONFIG_LANGUAGE_CS_CZ)
@@ -247,7 +247,60 @@ endif()
 
 file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
 
+# If target chip is ESP32, exclude specific files to avoid build errors
+if(CONFIG_IDF_TARGET_ESP32)
+    list(REMOVE_ITEM SOURCES "audio/codecs/box_audio_codec.cc"
+                             "audio/codecs/es8388_audio_codec.cc"
+                             "audio/codecs/es8389_audio_codec.cc"
+                             "led/gpio_led.cc"
+                             "display/lvgl_display/jpg/image_to_jpeg.cpp"
+                             "display/lvgl_display/jpg/jpeg_to_image.c"
+                             "boards/common/nt26_board.cc"
+                             "boards/common/ml307_board.cc"
+                             "boards/common/dual_network_board.cc"
+                             )
+endif()
+
+# Include EspVideo if target is ESP32S3 or ESP32P4
+if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4)
+    list(APPEND SOURCES "boards/common/esp_video.cc"
+                        "boards/common/rndis_board.cc"
+                        )
+endif()
+
+# Include EspVideo if target is ESP32S31
+if(CONFIG_IDF_TARGET_ESP32S31)
+    list(APPEND SOURCES "boards/common/esp_video.cc")
+endif()
+
+# Include Esp32Camera if target is ESP32S3
+if(CONFIG_IDF_TARGET_ESP32S3)
+    list(APPEND SOURCES "boards/common/esp32_camera.cc")
+endif()
+
 set(MAIN_PRIV_REQUIRES_EXTRA "")
+if(BOARD_TYPE STREQUAL "m5stack-stick-s3")
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        m5stack__m5pm1
+    )
+endif()
+if(CONFIG_BOARD_TYPE_ESP_SPOT_S3 OR CONFIG_BOARD_TYPE_ESP_SPOT_C5 OR CONFIG_BOARD_TYPE_ESP_VOCAT)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        espressif__bmi270_sensor
+    )
+endif()
+if(CONFIG_BOARD_TYPE_ESP_VOCAT AND IDF_VERSION_MAJOR LESS 6)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        espressif__touch_slider_sensor
+        espressif__touch_button_sensor
+    )
+endif()
+if(CONFIG_BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        esp_driver_sdmmc
+        sdmmc
+    )
+endif()
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
@@ -278,6 +331,12 @@ idf_component_register(SRCS ${SOURCES}
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
+# Keep project-owned C++ on GNU C++23. ESP-IDF 6 may default to a newer
+# dialect; pin the baseline so main/ does not depend on it.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    target_compile_options(${COMPONENT_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++23>)
+endif()
+
 # Use target_compile_definitions to define the reported board identity
 # If BOARD_NAME is empty, use BOARD_TYPE
 if(NOT BOARD_NAME)
@@ -301,6 +360,23 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
                         PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
                         PRIVATE TEXT_FONT_SIZE=${TEXT_FONT_SIZE} TEXT_FONT_BPP=${TEXT_FONT_BPP}
                         )
+    # ESP32-S3 LVGL builtin pool: PSRAM boards allocate it from PSRAM.
+    # Boards that set CONFIG_SPIRAM=n must not keep the 1MB chip-default
+    # pool as a .dram0.bss array (build.py also switches those variants
+    # back to CLIB malloc).
+    if(CONFIG_IDF_TARGET_ESP32S3)
+        idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
+        if(lvgl_lib)
+            target_include_directories(${lvgl_lib} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/display")
+            if(CONFIG_SPIRAM)
+                target_compile_definitions(${lvgl_lib} PRIVATE
+                    "LV_MEM_POOL_INCLUDE=\"lvgl_psram_pool.h\"")
+            elseif(CONFIG_LV_USE_BUILTIN_MALLOC)
+                target_compile_definitions(${lvgl_lib} PRIVATE
+                    "LV_MEM_POOL_INCLUDE=\"lvgl_no_psram_pool.h\"")
+            endif()
+        endif()
+    endif()
 endif()
 
 # Add generation rules
@@ -331,6 +407,87 @@ find_component_by_pattern("xiaozhi-fonts" NOTO_FONTS_COMPONENT NOTO_FONTS_COMPON
 if(NOTO_FONTS_COMPONENT_PATH)
     set(NOTO_FONTS_PATH "${NOTO_FONTS_COMPONENT_PATH}")
 endif()
+
+if(CONFIG_BOARD_TYPE_ESP_VOCAT)
+    find_component_by_pattern("esp_emote_assets" EMOTE_ASSETS_COMPONENT EMOTE_ASSETS_PATH)
+    if(EMOTE_ASSETS_PATH)
+        file(REMOVE_RECURSE "${ESP_VOCAT_ASSETS_STAGING}")
+        file(REMOVE
+            "${CMAKE_BINARY_DIR}/expression_assets.bin"
+            "${CMAKE_BINARY_DIR}/expression_assets.bin.validated"
+        )
+        file(MAKE_DIRECTORY "${ESP_VOCAT_ASSETS_STAGING}/360_360")
+        file(MAKE_DIRECTORY "${ESP_VOCAT_ASSETS_STAGING}/emoji_large")
+        file(COPY "${EMOTE_ASSETS_PATH}/emoji_large/" DESTINATION "${ESP_VOCAT_ASSETS_STAGING}/emoji_large")
+        file(COPY "${EMOTE_ASSETS_PATH}/360_360/layout.json" DESTINATION "${ESP_VOCAT_ASSETS_STAGING}/360_360")
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/boards/espressif/esp-vocat/assets/360_360/emote.json"
+             DESTINATION "${ESP_VOCAT_ASSETS_STAGING}/360_360")
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/boards/espressif/esp-vocat/emoji/low_battery.eaf"
+             DESTINATION "${ESP_VOCAT_ASSETS_STAGING}/emoji_large")
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/boards/espressif/esp-vocat/emoji/battery_connected.eaf"
+             DESTINATION "${ESP_VOCAT_ASSETS_STAGING}/emoji_large")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/boards/espressif/esp-vocat/assets/360_360/emote.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/boards/espressif/esp-vocat/emoji/low_battery.eaf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/boards/espressif/esp-vocat/emoji/battery_connected.eaf"
+        )
+    else()
+        message(WARNING "esp_emote_assets component not found; ESP-VoCat custom emotes will be skipped")
+    endif()
+endif()
+
+if(CONFIG_BOARD_TYPE_ESP_HI)
+# Pin AAF assets to a fixed image_player commit so builds stay reproducible.
+# Only pack AAF files referenced by emoji_display.cc — the full test_8bit set
+# plus wakenet models overflows the 1MB assets partition on the 4MB ESP-HI
+# flash map (see #2228).
+set(URL "https://github.com/espressif2022/image_player/raw/d61e0ccb1d7b0a2a214d0c90f5451fd683f41682/test_apps/test_8bit")
+set(EMOJI_DIR "${CMAKE_BINARY_DIR}/emoji")
+file(MAKE_DIRECTORY ${EMOJI_DIR})
+
+set(FILES_TO_DOWNLOAD
+    "Anger_loop.aaf"
+    "asking.aaf"
+    "blink_quick.aaf"
+    "connecting.aaf"
+    "happy_loop.aaf"
+    "panic_loop.aaf"
+    "sad_loop.aaf"
+    "scorn_loop.aaf"
+    "wake.aaf"
+)
+
+# Drop leftover AAF files from previous full-set downloads so they are not packed.
+file(GLOB EXISTING_AAF "${EMOJI_DIR}/*.aaf")
+foreach(EXISTING IN LISTS EXISTING_AAF)
+    get_filename_component(EXISTING_NAME "${EXISTING}" NAME)
+    list(FIND FILES_TO_DOWNLOAD "${EXISTING_NAME}" _aaf_idx)
+    if(_aaf_idx EQUAL -1)
+        file(REMOVE "${EXISTING}")
+        message(STATUS "Removed unused ESP-HI emoji asset ${EXISTING_NAME}")
+    endif()
+endforeach()
+
+foreach(FILENAME IN LISTS FILES_TO_DOWNLOAD)
+    set(REMOTE_FILE "${URL}/${FILENAME}")
+    set(LOCAL_FILE "${EMOJI_DIR}/${FILENAME}")
+
+    # Check if local file exists
+    if(EXISTS ${LOCAL_FILE})
+        message(STATUS "File ${FILENAME} already exists, skipping download")
+    else()
+        message(STATUS "Downloading ${FILENAME}")
+        file(DOWNLOAD ${REMOTE_FILE} ${LOCAL_FILE}
+             STATUS DOWNLOAD_STATUS)
+        list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+        if(NOT STATUS_CODE EQUAL 0)
+            message(FATAL_ERROR "Failed to download ${FILENAME} from ${URL}")
+        endif()
+    endif()
+endforeach()
+
+endif()
+
 
 # Function to build default assets based on configuration
 function(build_default_assets_bin)
@@ -376,6 +533,12 @@ function(build_default_assets_bin)
 
     list(APPEND BUILD_ARGS "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}")
     list(APPEND BUILD_ARGS "--noto_fonts_path" "${NOTO_FONTS_PATH}")
+
+    # Enforce assets.bin fits the flash partition (e.g. ESP-HI 4MB map uses 1MB assets).
+    partition_table_get_partition_info(assets_partition_size "--partition-name assets" "size")
+    if(assets_partition_size)
+        list(APPEND BUILD_ARGS "--max_size" "${assets_partition_size}")
+    endif()
 
     # Create custom command to build assets
     add_custom_command(
@@ -486,3 +649,5 @@ if ("${size}" AND "${offset}")
 else()
     message(STATUS "Assets partition not found, using v1 partition table")
 endif()
+
+
