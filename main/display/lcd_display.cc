@@ -1268,7 +1268,7 @@ void LcdDisplay::ShowActivationCode(const char* code, const char* message) {
         lv_canvas_set_palette(activation_qrcode_, 0, lv_color_to_32(lv_color_white(), LV_OPA_COVER));
         lv_canvas_set_palette(activation_qrcode_, 1, lv_color_to_32(lv_color_black(), LV_OPA_COVER));
         lv_draw_buf_clear(qr_buffer, nullptr);
-        lv_obj_align(activation_qrcode_, LV_ALIGN_TOP_MID, 0, 52);
+        lv_obj_align(activation_qrcode_, LV_ALIGN_TOP_MID, 0, 40);
         uint8_t qr_temp[kQrBufferLength] = {};
         uint8_t qr_code[kQrBufferLength] = {};
         if (!qrcodegen_encodeText(kActivationQrUrl, qr_temp, qr_code, qrcodegen_Ecc_MEDIUM, 1,
@@ -1309,7 +1309,7 @@ void LcdDisplay::ShowActivationCode(const char* code, const char* message) {
         lv_obj_set_style_text_align(activation_hint_label_, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(activation_hint_label_, theme->text_color(), 0);
         lv_label_set_text(activation_hint_label_, "请扫码绑定设备");
-        lv_obj_align(activation_hint_label_, LV_ALIGN_TOP_MID, 0, 185);
+        lv_obj_align(activation_hint_label_, LV_ALIGN_TOP_MID, 0, 166);
     }
     if (activation_site_label_ == nullptr) {
         activation_site_label_ = lv_label_create(screen);
@@ -1317,8 +1317,9 @@ void LcdDisplay::ShowActivationCode(const char* code, const char* message) {
         lv_obj_set_style_text_font(activation_site_label_, text_font, 0);
         lv_obj_set_style_text_align(activation_site_label_, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(activation_site_label_, theme->text_color(), 0);
-        lv_label_set_text(activation_site_label_, "或打开 xiaozhi.me\n输入下方激活码");
-        lv_obj_align(activation_site_label_, LV_ALIGN_TOP_MID, 0, 216);
+        lv_label_set_text(activation_site_label_,
+                          "或浏览器打开 http://\nxiaozhi.me 后\n输入下方激活码");
+        lv_obj_align(activation_site_label_, LV_ALIGN_TOP_MID, 0, 196);
     }
     if (activation_code_label_ == nullptr) {
         activation_code_label_ = lv_label_create(screen);
@@ -1326,7 +1327,7 @@ void LcdDisplay::ShowActivationCode(const char* code, const char* message) {
         lv_obj_set_style_text_font(activation_code_label_, text_font, 0);
         lv_obj_set_style_text_align(activation_code_label_, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(activation_code_label_, theme->text_color(), 0);
-        lv_obj_align(activation_code_label_, LV_ALIGN_TOP_MID, 0, 278);
+        lv_obj_align(activation_code_label_, LV_ALIGN_TOP_MID, 0, 292);
     }
 
     std::string code_text = "激活码：";
